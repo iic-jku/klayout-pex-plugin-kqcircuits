@@ -1,0 +1,194 @@
+#
+# --------------------------------------------------------------------------------
+# SPDX-FileCopyrightText: 2026 Martin Jan Köhler and Harald Pretl
+# Johannes Kepler University, Institute for Integrated Circuits.
+#
+# This file is part of klayout-pex-plugin-kqcircuits
+# (see https://github.com/martinjankoehler/klayout-pex-plugin-kqcircuits).
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# --------------------------------------------------------------------------------
+#
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_testpypi:
+        description: Publish the tested distributions to TestPyPI (main only)
+        type: boolean
+        default: false
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+  PYTHONWARNDEFAULTENCODING: '1'
+  KPEX_KLAYOUT_EXE: /nonexistent
+
+jobs:
+  test:
+    name: Test ${{ matrix.os }}-py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.12']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      - name: Check release version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(poetry version --short)
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "Release tag '$RELEASE_TAG' must match package version 'v$version'"
+            exit 1
+          fi
+      - name: Check lock file and install
+        run: |
+          poetry check --lock
+          poetry install --no-interaction
+      - name: Run plugin contract tests
+        run: poetry run pytest --color=no -rA
+
+  build:
+    name: Build and test distributions
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      - name: Install build checks
+        run: poetry install --no-interaction
+      - name: Build wheel and source archive
+        run: |
+          poetry build --output dist
+          poetry run twine check --strict dist/*
+      - name: Verify implicit namespace in wheel
+        run: |
+          poetry run python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          wheels = list(Path('dist').glob('*.whl'))
+          assert len(wheels) == 1, wheels
+          with ZipFile(wheels[0]) as archive:
+              names = archive.namelist()
+              assert 'klayout_pex_plugins/__init__.py' not in names
+              packages = {name.split('/')[1] for name in names
+                          if name.startswith('klayout_pex_plugins/')}
+              assert packages == {'kqcircuits'}, packages
+          PY
+      - name: Install wheel and rerun contract tests
+        run: |
+          poetry run python -m pip install --force-reinstall --no-deps dist/*.whl
+          poetry run python - <<'PY'
+          from pathlib import Path
+          import sysconfig
+          import klayout_pex_plugins.kqcircuits as plugin
+          assert Path(plugin.__file__).resolve().is_relative_to(
+              Path(sysconfig.get_path('purelib')).resolve())
+          PY
+          poetry run pytest --color=no -rA
+      - name: Install source archive and rerun contract tests
+        run: |
+          poetry run python -m pip install --force-reinstall --no-deps dist/*.tar.gz
+          poetry run pytest --color=no -rA
+      - uses: actions/upload-artifact@v6
+        with:
+          name: python-dist
+          path: dist
+          retention-days: 7
+          if-no-files-found: error
+
+  # Configure this workflow and the matching environment as a Trusted Publisher
+  # on each registry. These jobs work under either repository owner after its
+  # publisher is registered; no PyPI username or API-token secret is needed.
+  publish-test-pypi:
+    name: Publish to TestPyPI
+    needs: build
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.publish_testpypi))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/klayout-pex-plugin-kqcircuits/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/klayout-pex-plugin-kqcircuits/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
