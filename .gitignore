@@ -1,0 +1,23 @@
+# Local environments and Python build output
+.venv/
+.env
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+allure-results/
+
+# Exported solver inputs, solver results and local review artifacts
+/output*/
+*.log
+
+# Editor and operating-system files
+.DS_Store
+*.swp
+*.bak
