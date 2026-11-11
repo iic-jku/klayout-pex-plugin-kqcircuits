@@ -68,4 +68,4 @@ belongs to this distribution.
 
 - `klayout-pex>=0.9.0,<1`
 - Plugin API `v1` is provisional and may change before it is declared stable
-- GPL-3.0-or-later, matching the existing KPEX plugins; see [LICENSE](https://github.com/martinjankoehler/klayout-pex-plugin-kqcircuits/blob/main/LICENSE)
+- GPL-3.0-or-later, matching the existing KPEX plugins; see [LICENSE](https://github.com/iic-jku/klayout-pex-plugin-kqcircuits/blob/main/LICENSE)

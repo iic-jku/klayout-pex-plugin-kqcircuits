@@ -4,7 +4,7 @@
 # Johannes Kepler University, Institute for Integrated Circuits.
 #
 # This file is part of klayout-pex-plugin-kqcircuits
-# (see https://github.com/martinjankoehler/klayout-pex-plugin-kqcircuits).
+# (see https://github.com/iic-jku/klayout-pex-plugin-kqcircuits).
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
