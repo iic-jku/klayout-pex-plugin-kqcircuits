@@ -1224,14 +1224,14 @@ files = [
 
 [[package]]
 name = "klayout-pex"
-version = "0.9.0"
+version = "0.10.0"
 description = "Parasitic Extraction Tool for KLayout"
 optional = false
 python-versions = "<4.0,>=3.12"
 groups = ["main"]
 files = [
-    {file = "klayout_pex-0.9.0-py3-none-any.whl", hash = "sha256:da5ae4c7b79e5b26da169ebc562fdedd7eb2725d590d6f323be73f6a4de0e144"},
-    {file = "klayout_pex-0.9.0.tar.gz", hash = "sha256:6e6e2a1646b2ee6e54e23b43d9524c9892c34d4c04e6efe926daddf465eb89cf"},
+    {file = "klayout_pex-0.10.0-py3-none-any.whl", hash = "sha256:631ad580e56a17320863d06d1e9a19fee23fdbd7947b4bd6b59213f74a3df5f7"},
+    {file = "klayout_pex-0.10.0.tar.gz", hash = "sha256:5a01230d9d19e3fcbc25e0700f7423b36cefccc4725f998f7d0717244fb38ee5"},
 ]
 
 [package.dependencies]

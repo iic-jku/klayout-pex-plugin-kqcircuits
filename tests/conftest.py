@@ -29,7 +29,7 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 import sys
-from typing import TYPE_CHECKING, Callable, List
+from typing import TYPE_CHECKING, Callable, Iterator, List
 
 import pytest
 
@@ -48,6 +48,26 @@ def scene_path() -> Path:
 def scene(scene_path: Path) -> PEX25DScene:
     from klayout_pex import pex25d
     return pex25d.resolve(pex25d.read(str(scene_path)))
+
+
+@pytest.fixture(params=['new', 'empty', 'populated'])
+def export_destination(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Path]:
+    # Failure must preserve all three filesystem states, including an existing
+    # empty directory, which is different from an output directory never created.
+    destination = tmp_path / 'solver inputs'
+    if request.param != 'new':
+        destination.mkdir()
+    if request.param == 'populated':
+        (destination / 'keep.txt').write_text('previous result', encoding='utf-8')
+    yield destination
+    if request.param == 'new':
+        assert not destination.exists()
+    else:
+        assert destination.is_dir()
+        expected = ['keep.txt'] if request.param == 'populated' else []
+        assert sorted(path.name for path in destination.iterdir()) == expected
+        if expected:
+            assert (destination / 'keep.txt').read_text(encoding='utf-8') == 'previous result'
 
 
 @pytest.fixture

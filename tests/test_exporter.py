@@ -38,6 +38,8 @@ if TYPE_CHECKING:
     from klayout_pex_protobuf.kpex.pex25d.pex25d_scene_pb2 import PEX25DScene
 
 from klayout_pex import pex25d
+from klayout_pex.plugin_api.v1 import ExportError, SceneCapability
+from klayout_pex_protobuf.kpex.pex25d import pex25d_capabilities_pb2
 from klayout_pex_plugins.kqcircuits import KQCircuitsSceneExporter, create_exporter
 
 
@@ -61,31 +63,20 @@ def test_kpex_registry_loads_fresh_exporters(selector: str):
     assert registry.load(selector) is not first
 
 
-@pytest.mark.parametrize('existing_directory', [False, True])
 @pytest.mark.parametrize('prefix', ['', 'cell_'])
-def test_export_reports_unimplemented_without_side_effects(scene: PEX25DScene, tmp_path: Path,
-                                                          existing_directory: bool,
+def test_export_reports_unimplemented_without_side_effects(scene: PEX25DScene,
+                                                          export_destination: Path,
                                                           prefix: str):
-    # A failed exporter must neither create a new directory nor overwrite a
-    # previous run. Immutable options catch accidental mutation by an adapter.
-    destination = tmp_path / 'solver inputs'
-    if existing_directory:
-        destination.mkdir()
-        (destination / 'keep.txt').write_text('previous result', encoding='utf-8')
+    # Immutable options catch accidental mutation by an adapter.
     before_scene = scene.SerializeToString(deterministic=True)
     options = MappingProxyType({})
 
     with pytest.raises(NotImplementedError, match='KQCircuits export is not implemented yet'):
-        pex25d.export(scene, target='kqcircuits', output_dir_path=str(destination),
+        pex25d.export(scene, target='kqcircuits', output_dir_path=str(export_destination),
                       prefix=prefix, options=options)
 
     assert scene.SerializeToString(deterministic=True) == before_scene
     assert dict(options) == {}
-    if existing_directory:
-        assert sorted(path.name for path in destination.iterdir()) == ['keep.txt']
-        assert (destination / 'keep.txt').read_text(encoding='utf-8') == 'previous result'
-    else:
-        assert not destination.exists()
 
 
 def test_cli_lists_the_installed_plugin(run_python: RunPython):
@@ -94,17 +85,15 @@ def test_cli_lists_the_installed_plugin(run_python: RunPython):
     assert 'klayout-pex-plugin-kqcircuits:kqcircuits' in result.stdout
 
 
-def test_cli_reports_not_implemented(scene_path: Path, tmp_path: Path, run_python: RunPython):
-    destination = tmp_path / 'solver inputs'
+def test_cli_reports_not_implemented(scene_path: Path, export_destination: Path, run_python: RunPython):
     result = run_python([
         '-m', 'klayout_pex.pex25d', 'export', str(scene_path),
-        '--to', 'kqcircuits', '--out-dir', str(destination),
+        '--to', 'kqcircuits', '--out-dir', str(export_destination),
     ])
     output = result.stdout + result.stderr
     assert result.returncode == 3, output
     assert 'KQCircuits export is not implemented yet' in output
     assert 'Traceback' not in output
-    assert not destination.exists()
 
 
 def test_discovery_and_factory_do_not_load_optional_backends(run_python: RunPython):
@@ -148,3 +137,59 @@ assert IDENTITY == 'independent plugin'
 assert callable(create_exporter().export)
 """, str(peer_root)])
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('required, floating_collision', [
+    pytest.param(SceneCapability.CAPACITANCE_ACCOUNTING, False, id='accounting'),
+    pytest.param(SceneCapability.GROUND_CUTOUTS, False, id='ground-cutout'),
+    pytest.param(SceneCapability.ELECTRICAL_IDENTITY, False, id='ground-reference-net'),
+    pytest.param(SceneCapability.ELECTRICAL_IDENTITY, True, id='floating-net-name-collision'),
+])
+def test_required_capabilities_are_rejected_without_side_effects(
+        scene: PEX25DScene, required: SceneCapability, floating_collision: bool,
+        export_destination: Path, tmp_path: Path, run_python: RunPython):
+    # Each scene is physically valid. Rejection must identify the missing
+    # semantics, rather than a malformed scene or a crash inside the scaffold.
+    # Electrical identity covers both a distinct ground net and a collision
+    # between a named net and an independent floating conductor.
+    match required:
+        case SceneCapability.CAPACITANCE_ACCOUNTING:
+            scene.required_capabilities.append(
+                pex25d_capabilities_pb2.REQUIRED_CAPABILITY_CAPACITANCE_ACCOUNTING)
+            scene.capacitance_accounting.excluded_substrate_nets.append('neta')
+        case SceneCapability.GROUND_CUTOUTS:
+            scene.ground_plane.net = scene.ground_plane.name
+            opening = scene.ground_plane.cutouts.add()
+            for x, y in [(-1000, -1000), (0, -1000), (0, 0), (-1000, 0)]:
+                opening.polygon.outer.points.add(x=x, y=y)
+        case SceneCapability.ELECTRICAL_IDENTITY:
+            if floating_collision:
+                next(conductor for conductor in scene.conductors if conductor.name == 'A').net = 'F'
+            else:
+                scene.ground_plane.net = 'VSS'
+        case _:
+            raise NotImplementedError(f'Capability rejection fixture for {required!r}')
+
+    report = pex25d.validate(scene)
+    assert report.num_errors == 0, report.diagnostics
+    before_scene = scene.SerializeToString(deterministic=True)
+    options = MappingProxyType({})
+    with pytest.raises(ExportError, match='does not support required scene capabilities') as error:
+        pex25d.export(scene, target='kqcircuits', output_dir_path=str(export_destination), options=options)
+    assert required.value in str(error.value)
+    assert scene.SerializeToString(deterministic=True) == before_scene
+    assert dict(options) == {}
+
+    artifact = tmp_path / 'input.pex25d.scene.pb'
+    artifact.write_bytes(before_scene)
+    result = run_python([
+        '-m', 'klayout_pex.pex25d', 'export', str(artifact),
+        '--to', 'kqcircuits', '--out-dir', str(export_destination),
+    ])
+    output = result.stdout + result.stderr
+    assert result.returncode == 2, output
+    # Rich may insert its source-location column between wrapped message lines.
+    assert 'required scene capabilities:' in output, output
+    assert required.value in output, output
+    assert 'Traceback' not in output, output
+    assert artifact.read_bytes() == before_scene
